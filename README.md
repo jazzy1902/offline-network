@@ -1,2 +1,2 @@
 # offline-network
-# Offline-NetworkAn app for creating offline networks
+An app for creating offline networks
