@@ -1,0 +1,1 @@
+"""User interface module for the offline network application.""" 
