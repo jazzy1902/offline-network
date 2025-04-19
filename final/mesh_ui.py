@@ -201,13 +201,17 @@ class MeshNetworkUI:
         
     def _create_hotspot_thread(self):
         """Create a WiFi hotspot in a separate thread."""
-        from network_utils import create_hotspot, get_ip_addresses
+        from network_utils import create_hotspot, get_ip_addresses, MESH_SSID_PREFIX, MESH_PASSWORD
         
         self.add_to_message_history("Creating hotspot...")
         success, ssid = create_hotspot()
         
         if success:
-            self.add_to_message_history(f"Hotspot created with SSID: {ssid}")
+            self.add_to_message_history(f"Hotspot created/configured with SSID: {ssid}")
+            self.add_to_message_history("NOTE: If hotspot creation failed automatically, please:")
+            self.add_to_message_history(f"1. Manually create a hotspot with name that starts with '{MESH_SSID_PREFIX}'")
+            self.add_to_message_history(f"2. Set password to: {MESH_PASSWORD}")
+            self.add_to_message_history("3. Make sure the hotspot is turned ON")
             
             # Give some time for the network interface to initialize
             time.sleep(5)
@@ -222,7 +226,12 @@ class MeshNetworkUI:
             else:
                 self.add_to_message_history("Warning: Could not get IP address after creating hotspot")
         else:
-            self.add_to_message_history("Failed to create hotspot. Check your WiFi adapter capabilities.")
+            self.add_to_message_history("Failed to create hotspot automatically.")
+            self.add_to_message_history("Please try creating a mobile hotspot manually:")
+            self.add_to_message_history(f"1. Go to Settings > Network & Internet > Mobile hotspot")
+            self.add_to_message_history(f"2. Set network name to start with '{MESH_SSID_PREFIX}'")
+            self.add_to_message_history(f"3. Set password to: {MESH_PASSWORD}")
+            self.add_to_message_history(f"4. Turn on the hotspot")
             
     def scan_networks(self):
         """Scan for available networks."""
@@ -237,14 +246,29 @@ class MeshNetworkUI:
         self.add_to_message_history("Scanning for networks...")
         networks = scan_wifi_networks()
         
+        # Show all available networks first
+        if networks:
+            self.add_to_message_history(f"Found {len(networks)} networks:")
+            for network in networks:
+                self.add_to_message_history(f"  - {network.ssid} (Signal: {network.signal})")
+        else:
+            self.add_to_message_history("No wireless networks found. Check if your WiFi is enabled.")
+            return
+        
+        # Then show mesh networks specifically
         mesh_networks = [n for n in networks if is_mesh_network(n.ssid)]
         
         if mesh_networks:
-            self.add_to_message_history("Found mesh networks:")
+            self.add_to_message_history("\nFound mesh networks:")
             for network in mesh_networks:
                 self.add_to_message_history(f"  - {network.ssid} (Signal: {network.signal})")
         else:
-            self.add_to_message_history("No mesh networks found.")
+            self.add_to_message_history("\nNo mesh networks found with prefix 'DISASTER_MESH_'")
+            self.add_to_message_history("If you created a hotspot manually, make sure its name starts with 'DISASTER_MESH_'")
+            
+            # Add option for direct connection
+            self.add_to_message_history("\nWould you like to connect to a network directly?")
+            self.add_to_message_history("Use the 'Connect to Mesh' button and specify the network name when prompted.")
             
     def connect_to_mesh(self):
         """Connect to an available mesh network."""
@@ -254,15 +278,24 @@ class MeshNetworkUI:
         
     def _connect_to_mesh_thread(self):
         """Connect to a mesh network in a separate thread."""
-        from network_utils import find_mesh_networks, connect_to_wifi, MESH_PASSWORD, get_ip_addresses
+        from network_utils import find_mesh_networks, scan_wifi_networks, connect_to_wifi, MESH_PASSWORD, get_ip_addresses
+        import tkinter.simpledialog as simpledialog
         
         self.add_to_message_history("Looking for mesh networks...")
+        
+        # Get all available networks first
+        networks = scan_wifi_networks()
+        if not networks:
+            self.add_to_message_history("No wireless networks found. Check if your WiFi is enabled.")
+            return
+            
+        # Find mesh networks
         mesh_networks = find_mesh_networks()
         
         if mesh_networks:
             # Connect to the first available mesh network
             network = mesh_networks[0]
-            self.add_to_message_history(f"Connecting to {network.ssid}...")
+            self.add_to_message_history(f"Found mesh network. Connecting to {network.ssid}...")
             
             success = connect_to_wifi(network.ssid, MESH_PASSWORD)
             
@@ -283,8 +316,51 @@ class MeshNetworkUI:
                     self.add_to_message_history("Warning: Could not get IP address after connecting")
             else:
                 self.add_to_message_history(f"Failed to connect to {network.ssid}")
+                self.add_to_message_history("The password should be: " + MESH_PASSWORD)
+                self.add_to_message_history("Try connecting manually through Windows network settings")
         else:
-            self.add_to_message_history("No mesh networks found. Try scanning again or create a hotspot.")
+            self.add_to_message_history("No mesh networks found with our prefix.")
+            self.add_to_message_history("Available networks:")
+            for i, network in enumerate(networks):
+                self.add_to_message_history(f"{i+1}. {network.ssid}")
+            
+            # Ask the user if they want to try connecting manually
+            self.add_to_message_history("\nWould you like to connect to a specific network?")
+            self.add_to_message_history("Enter the network name in your command prompt")
+            
+            # Using command line input since tkinter dialogs are problematic in threads
+            print("\n=== NETWORK CONNECTION ===")
+            print("Available networks:")
+            for i, network in enumerate(networks):
+                print(f"{i+1}. {network.ssid}")
+            print("\nEnter the name of the network you want to connect to: ")
+            network_name = input()
+            
+            if network_name:
+                self.add_to_message_history(f"Attempting to connect to: {network_name}")
+                success = connect_to_wifi(network_name, MESH_PASSWORD)
+                
+                if success:
+                    self.add_to_message_history(f"Connected to {network_name}")
+                    
+                    # Give some time for the network interface to initialize
+                    time.sleep(5)
+                    
+                    # Get IP addresses after connecting
+                    ip_addresses = get_ip_addresses()
+                    if ip_addresses:
+                        # Use the first non-loopback IP address
+                        self.mesh_node.ip = ip_addresses[0]
+                        self.mesh_node.start(ip_addresses[0])
+                        self.add_to_message_history(f"Mesh node started with IP: {ip_addresses[0]}")
+                    else:
+                        self.add_to_message_history("Warning: Could not get IP address after connecting")
+                else:
+                    self.add_to_message_history(f"Failed to connect to {network_name}")
+                    self.add_to_message_history("Please try connecting manually through Windows settings")
+            else:
+                self.add_to_message_history("No network specified.")
+                self.add_to_message_history("You can try connecting manually through Windows WiFi settings")
             
     def on_closing(self):
         """Handle window closing event."""

@@ -60,18 +60,68 @@ def get_ip_addresses():
 
 def scan_wifi_networks():
     """Scan for available WiFi networks."""
-    wifi = pywifi.PyWiFi()
-    iface = wifi.interfaces()[0]  # Use the first wireless interface
-    
-    iface.scan()
-    time.sleep(2)  # Wait for scan to complete
-    
-    scan_results = iface.scan_results()
-    return scan_results
+    print("Starting WiFi scan...")
+    try:
+        wifi = pywifi.PyWiFi()
+        if not wifi.interfaces():
+            print("ERROR: No wireless interfaces found!")
+            return []
+            
+        iface = wifi.interfaces()[0]  # Use the first wireless interface
+        print(f"Using wireless interface: {iface.name()}")
+        
+        # Get current connection status
+        current_status = iface.status()
+        status_names = {
+            0: "DISCONNECTED",
+            1: "SCANNING",
+            2: "INACTIVE",
+            3: "CONNECTING",
+            4: "CONNECTED"
+        }
+        print(f"Current interface status: {status_names.get(current_status, current_status)}")
+        
+        print("Scanning for networks...")
+        iface.scan()
+        
+        # Wait longer for scan to complete
+        print("Waiting for scan to complete...")
+        time.sleep(5)  # Increased from 2 to 5 seconds
+        
+        scan_results = iface.scan_results()
+        print(f"Found {len(scan_results)} networks:")
+        
+        # Print details of all networks found
+        for i, network in enumerate(scan_results):
+            print(f"  {i+1}. SSID: {network.ssid}, Signal: {network.signal}, Auth: {network.akm}")
+        
+        return scan_results
+    except Exception as e:
+        print(f"ERROR during WiFi scan: {e}")
+        import traceback
+        traceback.print_exc()
+        return []
 
 def is_mesh_network(ssid):
     """Check if a network SSID belongs to our mesh network."""
-    return ssid.startswith(MESH_SSID_PREFIX)
+    # Make sure ssid is not None
+    if not ssid:
+        return False
+        
+    # Primary check: starts with our prefix
+    if ssid.startswith(MESH_SSID_PREFIX):
+        print(f"Found mesh network (by prefix): {ssid}")
+        return True
+    
+    # Secondary check: contains keywords for manually created hotspots
+    keywords = ["disaster", "mesh", "emergency", "offline"]
+    ssid_lower = ssid.lower()
+    for keyword in keywords:
+        if keyword in ssid_lower:
+            print(f"Found mesh network (by keyword '{keyword}'): {ssid}")
+            return True
+    
+    return False
 
 def find_mesh_networks():
     """Find all available mesh networks."""
@@ -120,10 +170,16 @@ def create_hotspot():
         
         # Start the hosted network
         result = subprocess.run(['netsh', 'wlan', 'start', 'hostednetwork'], capture_output=True)
+        result_text = result.stdout.decode() if result.stdout else result.stderr.decode()
         
-        if "The hosted network started." in result.stdout.decode():
+        if "The hosted network started." in result_text:
+            print(f"Successfully created hotspot with SSID: {ssid}")
             return True, ssid
         else:
+            print("Automatic hotspot creation failed. Trying alternative method...")
+            print(f"Please manually create a mobile hotspot with name: {ssid}")
+            print(f"Password should be: {MESH_PASSWORD}")
+            
             # Alternative approach using mobile hotspot feature in Windows 10
             shell = win32com.client.Dispatch("WScript.Shell")
             shell.SendKeys("^{ESC}")  # Press Windows key
@@ -132,12 +188,17 @@ def create_hotspot():
             time.sleep(0.5)
             shell.SendKeys("{ENTER}")
             time.sleep(2)
-            # This part is more challenging as there's no direct API
-            # Here we're just opening the settings, user may need to 
-            # enable it manually for the first time
+            
+            print("Mobile hotspot settings should now be open.")
+            print(f"1. Set the Network name to: {ssid}")
+            print(f"2. Set the Network password to: {MESH_PASSWORD}")
+            print("3. Turn on the hotspot")
+            
             return True, ssid
     except Exception as e:
         print(f"Error creating hotspot: {e}")
+        print(f"Please manually create a mobile hotspot with name: {ssid}")
+        print(f"Password should be: {MESH_PASSWORD}")
         return False, None
 
 def stop_hotspot():
