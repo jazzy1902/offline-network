@@ -1,0 +1,22 @@
+R_DEF: Internal format may change without notice
+local
+color purple_500
+color purple_700
+color white
+drawable received_message_bg
+drawable sent_message_bg
+id chat_container
+id device_list
+id find_devices_btn
+id message_container
+id message_input
+id message_text
+id root_layout
+id scroll_view
+id send_btn
+layout activity_chat
+layout activity_device_list
+layout activity_main
+layout message_bubble
+string app_name
+style Theme.OfflineMesh

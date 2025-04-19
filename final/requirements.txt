@@ -1,0 +1,4 @@
+pywifi==1.1.12
+scapy==2.5.0
+pywin32==306
+cryptography==42.0.4 
