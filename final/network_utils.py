@@ -81,6 +81,17 @@ class MeshNetworkManager:
                         continue
                     else:
                         self.log(f"Failed to connect to {network.ssid}")
+                        # Try next network if available
+                        if len(mesh_networks) > 1:
+                            for backup_network in mesh_networks[1:]:
+                                self.log(f"Trying backup network: {backup_network.ssid}")
+                                if self._connect_to_network(backup_network.ssid, MESH_PASSWORD):
+                                    self.connected = True
+                                    self.is_host = False
+                                    self.current_ssid = backup_network.ssid
+                                    self.connection_attempts = 0
+                                    self.log(f"Successfully connected to {backup_network.ssid}")
+                                    break
                 
                 # If no networks found or connection failed, try to create a hotspot
                 if not self.connected:
@@ -92,6 +103,16 @@ class MeshNetworkManager:
                         time.sleep(60)  # Wait longer between attempts
                         self.connection_attempts = 0
                         continue
+                    
+                    # Double-check for networks again before creating a hotspot
+                    # This helps prevent both devices from creating hotspots simultaneously
+                    self.log("Double-checking for mesh networks before creating hotspot...")
+                    time.sleep(5)  # Add a small delay for network discovery
+                    second_scan = self._find_mesh_networks()
+                    
+                    if second_scan:
+                        self.log(f"Found mesh network on second scan: {second_scan[0].ssid}")
+                        continue  # Go back to the top of the loop to try connecting
                     
                     # Try to become a hotspot
                     self.log("No mesh networks found. Attempting to create a hotspot...")
@@ -117,8 +138,10 @@ class MeshNetworkManager:
             wifi = pywifi.PyWiFi()
             iface = wifi.interfaces()[0]
             
-            iface.scan()
-            time.sleep(3)
+            # Scan multiple times to ensure we find all networks
+            for _ in range(2):
+                iface.scan()
+                time.sleep(4)  # Give more time for scanning
             
             scan_results = iface.scan_results()
             mesh_networks = []
@@ -126,10 +149,18 @@ class MeshNetworkManager:
             for network in scan_results:
                 if network.ssid and (network.ssid.startswith(MESH_SSID_PREFIX) or 
                                     any(keyword in network.ssid.lower() for keyword in ["disaster", "mesh", "emergency"])):
-                    mesh_networks.append(network)
+                    # Only add networks not already in the list
+                    if not any(existing.ssid == network.ssid for existing in mesh_networks):
+                        mesh_networks.append(network)
             
             # Sort by signal strength
             mesh_networks.sort(key=lambda x: x.signal, reverse=True)
+            
+            if mesh_networks:
+                self.log(f"Found {len(mesh_networks)} mesh networks: {', '.join([n.ssid for n in mesh_networks])}")
+            else:
+                self.log("No mesh networks found during scan")
+                
             return mesh_networks
         
         except Exception as e:
