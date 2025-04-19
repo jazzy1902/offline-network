@@ -1,15 +1,21 @@
 import tkinter as tk
-from tkinter import ttk, scrolledtext, messagebox
+from tkinter import ttk, scrolledtext, messagebox, filedialog
 import threading
 import time
+import os
 
 class MeshNetworkUI:
-    def __init__(self, mesh_node, root=None):
+    def __init__(self, mesh_node, network_manager, root=None):
         self.mesh_node = mesh_node
+        self.network_manager = network_manager
         self.root = root or tk.Tk()
         self.root.title("Disaster Mesh Network")
         self.root.geometry("800x700")  # Increased height for better visibility
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
+        
+        # Register message handler callback
+        self.mesh_node.on_message_received = self.on_message_received
+        self.mesh_node.on_file_info_received = self.on_file_info_received
         
         self.setup_ui()
         
@@ -68,40 +74,45 @@ class MeshNetworkUI:
         self.ip_label = ttk.Label(status_frame, text=self.mesh_node.ip or "Not connected")
         self.ip_label.grid(row=1, column=1, sticky=tk.W, padx=5, pady=2)
         
-        # Active peers count
-        ttk.Label(status_frame, text="Active Peers:").grid(row=2, column=0, sticky=tk.W, padx=5, pady=2)
-        self.peers_label = ttk.Label(status_frame, text="0")
-        self.peers_label.grid(row=2, column=1, sticky=tk.W, padx=5, pady=2)
+        # Network Status
+        ttk.Label(status_frame, text="Network Status:").grid(row=2, column=0, sticky=tk.W, padx=5, pady=2)
+        self.network_status_label = ttk.Label(status_frame, text="Initializing...")
+        self.network_status_label.grid(row=2, column=1, sticky=tk.W, padx=5, pady=2)
         
-        # Network controls frame - MOVED TO TOP FOR VISIBILITY
-        controls_frame = ttk.LabelFrame(main_frame, text="Network Controls", padding="10")
+        # Active peers count
+        ttk.Label(status_frame, text="Active Peers:").grid(row=3, column=0, sticky=tk.W, padx=5, pady=2)
+        self.peers_label = ttk.Label(status_frame, text="0")
+        self.peers_label.grid(row=3, column=1, sticky=tk.W, padx=5, pady=2)
+        
+        # Network controls frame
+        controls_frame = ttk.LabelFrame(main_frame, text="Controls", padding="10")
         controls_frame.pack(fill=tk.X, padx=5, pady=10)
         
-        # Create a frame for the buttons to ensure they're visible and properly spaced
+        # Create a frame for the buttons
         buttons_frame = ttk.Frame(controls_frame)
         buttons_frame.pack(fill=tk.X, padx=5, pady=5)
         
-        # Network control buttons with improved styling
-        self.create_hotspot_button = ttk.Button(
+        # Control buttons
+        self.refresh_button = ttk.Button(
             buttons_frame, 
-            text="Create Hotspot", 
-            command=self.create_hotspot
+            text="Refresh Peers", 
+            command=self.refresh_peers
         )
-        self.create_hotspot_button.pack(side=tk.LEFT, padx=5, pady=5, expand=True, fill=tk.X)
+        self.refresh_button.pack(side=tk.LEFT, padx=5, pady=5, expand=True, fill=tk.X)
         
-        self.scan_networks_button = ttk.Button(
+        self.send_file_button = ttk.Button(
             buttons_frame, 
-            text="Scan Networks", 
-            command=self.scan_networks
+            text="Send File", 
+            command=self.send_file
         )
-        self.scan_networks_button.pack(side=tk.LEFT, padx=5, pady=5, expand=True, fill=tk.X)
+        self.send_file_button.pack(side=tk.LEFT, padx=5, pady=5, expand=True, fill=tk.X)
         
-        self.connect_button = ttk.Button(
+        self.clear_log_button = ttk.Button(
             buttons_frame, 
-            text="Connect to Mesh", 
-            command=self.connect_to_mesh
+            text="Clear Log", 
+            command=self.clear_log
         )
-        self.connect_button.pack(side=tk.LEFT, padx=5, pady=5, expand=True, fill=tk.X)
+        self.clear_log_button.pack(side=tk.LEFT, padx=5, pady=5, expand=True, fill=tk.X)
         
         # Peer list frame
         peers_frame = ttk.LabelFrame(main_frame, text="Peer Nodes", padding="5")
@@ -122,7 +133,7 @@ class MeshNetworkUI:
         messaging_frame.pack(fill=tk.X, padx=5, pady=5)
         
         # Message history
-        self.message_history = scrolledtext.ScrolledText(messaging_frame, wrap=tk.WORD, height=8)
+        self.message_history = scrolledtext.ScrolledText(messaging_frame, wrap=tk.WORD, height=12)
         self.message_history.pack(fill=tk.X, padx=5, pady=5)
         self.message_history.config(state=tk.DISABLED)
         
@@ -138,6 +149,11 @@ class MeshNetworkUI:
         
         # Bind Enter key to send message
         self.message_input.bind("<Return>", lambda event: self.send_message())
+        
+        # Add initial status message
+        self.add_to_message_history("Welcome to the Disaster Mesh Network!")
+        self.add_to_message_history("The system is automatically connecting to nearby devices...")
+        self.add_to_message_history("Just wait a moment while we establish the network.")
     
     def update_ui_periodically(self):
         """Update UI elements periodically."""
@@ -171,6 +187,17 @@ class MeshNetworkUI:
         self.node_id_label.config(text=self.mesh_node.node_id)
         self.ip_label.config(text=self.mesh_node.ip or "Not connected")
         
+        # Update network status
+        if self.network_manager:
+            if self.network_manager.connected:
+                if self.network_manager.is_host:
+                    status = f"Hosting network: {self.network_manager.current_ssid}"
+                else:
+                    status = f"Connected to: {self.network_manager.current_ssid}"
+                self.network_status_label.config(text=status)
+            else:
+                self.network_status_label.config(text="Searching for network...")
+        
     def send_message(self):
         """Send a message to all peers."""
         message = self.message_input.get().strip()
@@ -184,7 +211,30 @@ class MeshNetworkUI:
             # Send message to peers
             success = self.mesh_node.send_text_message(message)
             if not success:
-                self.add_to_message_history("Warning: No active peers to receive the message")
+                self.add_to_message_history("Warning: Message may not reach all peers")
+                
+    def send_file(self):
+        """Send a file to all peers."""
+        file_path = filedialog.askopenfilename(
+            title="Select a file to send",
+            filetypes=(("All files", "*.*"),)
+        )
+        
+        if file_path:
+            file_name = os.path.basename(file_path)
+            self.add_to_message_history(f"Sending file: {file_name}")
+            
+            # Send the file in a separate thread to avoid freezing the UI
+            def send_file_thread():
+                success = self.mesh_node.send_file(file_path)
+                if success:
+                    self.add_to_message_history(f"File sent successfully: {file_name}")
+                else:
+                    self.add_to_message_history(f"Failed to send file: {file_name}")
+            
+            thread = threading.Thread(target=send_file_thread)
+            thread.daemon = True
+            thread.start()
                 
     def add_to_message_history(self, message):
         """Add a message to the message history."""
@@ -192,176 +242,33 @@ class MeshNetworkUI:
         self.message_history.insert(tk.END, message + "\n")
         self.message_history.see(tk.END)  # Scroll to the end
         self.message_history.config(state=tk.DISABLED)
+    
+    def refresh_peers(self):
+        """Manually refresh peer list."""
+        self.update_peer_list()
+        self.add_to_message_history("Refreshed peer list")
+    
+    def clear_log(self):
+        """Clear the message history."""
+        self.message_history.config(state=tk.NORMAL)
+        self.message_history.delete(1.0, tk.END)
+        self.message_history.config(state=tk.DISABLED)
+        self.add_to_message_history("Log cleared")
+    
+    def on_message_received(self, message):
+        """Handle received text messages."""
+        # Add message to history
+        self.add_to_message_history(f"{message.sender_id}: {message.content}")
+    
+    def on_file_info_received(self, message):
+        """Handle file info messages."""
+        file_info = message.content
+        file_name = file_info.get('filename', 'Unknown')
+        file_size = file_info.get('size', 0)
+        size_kb = file_size / 1024
         
-    def create_hotspot(self):
-        """Create a WiFi hotspot."""
-        thread = threading.Thread(target=self._create_hotspot_thread)
-        thread.daemon = True
-        thread.start()
+        self.add_to_message_history(f"{message.sender_id} is sending file: {file_name} ({size_kb:.1f} KB)")
         
-    def _create_hotspot_thread(self):
-        """Create a WiFi hotspot in a separate thread."""
-        from network_utils import create_hotspot, get_ip_addresses, MESH_SSID_PREFIX, MESH_PASSWORD
-        
-        self.add_to_message_history("Creating hotspot...")
-        success, ssid = create_hotspot()
-        
-        if success:
-            self.add_to_message_history(f"Hotspot created/configured with SSID: {ssid}")
-            self.add_to_message_history("NOTE: If hotspot creation failed automatically, please:")
-            self.add_to_message_history(f"1. Manually create a hotspot with name that starts with '{MESH_SSID_PREFIX}'")
-            self.add_to_message_history(f"2. Set password to: {MESH_PASSWORD}")
-            self.add_to_message_history("3. Make sure the hotspot is turned ON")
-            
-            # Give some time for the network interface to initialize
-            time.sleep(5)
-            
-            # Get IP addresses after creating hotspot
-            ip_addresses = get_ip_addresses()
-            if ip_addresses:
-                # Use the first non-loopback IP address
-                self.mesh_node.ip = ip_addresses[0]
-                self.mesh_node.start(ip_addresses[0])
-                self.add_to_message_history(f"Mesh node started with IP: {ip_addresses[0]}")
-            else:
-                self.add_to_message_history("Warning: Could not get IP address after creating hotspot")
-        else:
-            self.add_to_message_history("Failed to create hotspot automatically.")
-            self.add_to_message_history("Please try creating a mobile hotspot manually:")
-            self.add_to_message_history(f"1. Go to Settings > Network & Internet > Mobile hotspot")
-            self.add_to_message_history(f"2. Set network name to start with '{MESH_SSID_PREFIX}'")
-            self.add_to_message_history(f"3. Set password to: {MESH_PASSWORD}")
-            self.add_to_message_history(f"4. Turn on the hotspot")
-            
-    def scan_networks(self):
-        """Scan for available networks."""
-        thread = threading.Thread(target=self._scan_networks_thread)
-        thread.daemon = True
-        thread.start()
-        
-    def _scan_networks_thread(self):
-        """Scan for available networks in a separate thread."""
-        from network_utils import scan_wifi_networks, is_mesh_network
-        
-        self.add_to_message_history("Scanning for networks...")
-        networks = scan_wifi_networks()
-        
-        # Show all available networks first
-        if networks:
-            self.add_to_message_history(f"Found {len(networks)} networks:")
-            for network in networks:
-                self.add_to_message_history(f"  - {network.ssid} (Signal: {network.signal})")
-        else:
-            self.add_to_message_history("No wireless networks found. Check if your WiFi is enabled.")
-            return
-        
-        # Then show mesh networks specifically
-        mesh_networks = [n for n in networks if is_mesh_network(n.ssid)]
-        
-        if mesh_networks:
-            self.add_to_message_history("\nFound mesh networks:")
-            for network in mesh_networks:
-                self.add_to_message_history(f"  - {network.ssid} (Signal: {network.signal})")
-        else:
-            self.add_to_message_history("\nNo mesh networks found with prefix 'DISASTER_MESH_'")
-            self.add_to_message_history("If you created a hotspot manually, make sure its name starts with 'DISASTER_MESH_'")
-            
-            # Add option for direct connection
-            self.add_to_message_history("\nWould you like to connect to a network directly?")
-            self.add_to_message_history("Use the 'Connect to Mesh' button and specify the network name when prompted.")
-            
-    def connect_to_mesh(self):
-        """Connect to an available mesh network."""
-        thread = threading.Thread(target=self._connect_to_mesh_thread)
-        thread.daemon = True
-        thread.start()
-        
-    def _connect_to_mesh_thread(self):
-        """Connect to a mesh network in a separate thread."""
-        from network_utils import find_mesh_networks, scan_wifi_networks, connect_to_wifi, MESH_PASSWORD, get_ip_addresses
-        import tkinter.simpledialog as simpledialog
-        
-        self.add_to_message_history("Looking for mesh networks...")
-        
-        # Get all available networks first
-        networks = scan_wifi_networks()
-        if not networks:
-            self.add_to_message_history("No wireless networks found. Check if your WiFi is enabled.")
-            return
-            
-        # Find mesh networks
-        mesh_networks = find_mesh_networks()
-        
-        if mesh_networks:
-            # Connect to the first available mesh network
-            network = mesh_networks[0]
-            self.add_to_message_history(f"Found mesh network. Connecting to {network.ssid}...")
-            
-            success = connect_to_wifi(network.ssid, MESH_PASSWORD)
-            
-            if success:
-                self.add_to_message_history(f"Connected to {network.ssid}")
-                
-                # Give some time for the network interface to initialize
-                time.sleep(5)
-                
-                # Get IP addresses after connecting
-                ip_addresses = get_ip_addresses()
-                if ip_addresses:
-                    # Use the first non-loopback IP address
-                    self.mesh_node.ip = ip_addresses[0]
-                    self.mesh_node.start(ip_addresses[0])
-                    self.add_to_message_history(f"Mesh node started with IP: {ip_addresses[0]}")
-                else:
-                    self.add_to_message_history("Warning: Could not get IP address after connecting")
-            else:
-                self.add_to_message_history(f"Failed to connect to {network.ssid}")
-                self.add_to_message_history("The password should be: " + MESH_PASSWORD)
-                self.add_to_message_history("Try connecting manually through Windows network settings")
-        else:
-            self.add_to_message_history("No mesh networks found with our prefix.")
-            self.add_to_message_history("Available networks:")
-            for i, network in enumerate(networks):
-                self.add_to_message_history(f"{i+1}. {network.ssid}")
-            
-            # Ask the user if they want to try connecting manually
-            self.add_to_message_history("\nWould you like to connect to a specific network?")
-            self.add_to_message_history("Enter the network name in your command prompt")
-            
-            # Using command line input since tkinter dialogs are problematic in threads
-            print("\n=== NETWORK CONNECTION ===")
-            print("Available networks:")
-            for i, network in enumerate(networks):
-                print(f"{i+1}. {network.ssid}")
-            print("\nEnter the name of the network you want to connect to: ")
-            network_name = input()
-            
-            if network_name:
-                self.add_to_message_history(f"Attempting to connect to: {network_name}")
-                success = connect_to_wifi(network_name, MESH_PASSWORD)
-                
-                if success:
-                    self.add_to_message_history(f"Connected to {network_name}")
-                    
-                    # Give some time for the network interface to initialize
-                    time.sleep(5)
-                    
-                    # Get IP addresses after connecting
-                    ip_addresses = get_ip_addresses()
-                    if ip_addresses:
-                        # Use the first non-loopback IP address
-                        self.mesh_node.ip = ip_addresses[0]
-                        self.mesh_node.start(ip_addresses[0])
-                        self.add_to_message_history(f"Mesh node started with IP: {ip_addresses[0]}")
-                    else:
-                        self.add_to_message_history("Warning: Could not get IP address after connecting")
-                else:
-                    self.add_to_message_history(f"Failed to connect to {network_name}")
-                    self.add_to_message_history("Please try connecting manually through Windows settings")
-            else:
-                self.add_to_message_history("No network specified.")
-                self.add_to_message_history("You can try connecting manually through Windows WiFi settings")
-            
     def on_closing(self):
         """Handle window closing event."""
         if messagebox.askokcancel("Quit", "Do you want to quit the application?"):
